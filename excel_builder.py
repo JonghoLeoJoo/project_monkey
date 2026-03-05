@@ -150,8 +150,30 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     bs   = fd['balance_sheet']
     cf   = fd['cash_flow']
 
+    # ── Annualized (LTM) column setup ─────────────────────────────────
+    has_ann = 'annualized' in fd and 'ltm_info' in fd
+    _ltm_info = fd.get('ltm_info', {})
+    ANN_YEAR = None
+    if has_ann:
+        ANN_YEAR = years[-1] + 0.5          # sentinel key for annualized col
+        _ann_src = fd['annualized']
+        _ann_is = _ann_src.get('income_statement', {})
+        _ann_bs = _ann_src.get('balance_sheet', {})
+        _ann_cf = _ann_src.get('cash_flow', {})
+        for key in inc:
+            if isinstance(inc[key], dict):
+                inc[key][ANN_YEAR] = _ann_is.get(key)
+        for key in bs:
+            if isinstance(bs[key], dict):
+                bs[key][ANN_YEAR] = _ann_bs.get(key)
+        for key in cf:
+            if isinstance(cf[key], dict):
+                cf[key][ANN_YEAR] = _ann_cf.get(key)
+        years.append(ANN_YEAR)
+        n = len(years)
+
     # ── Projection setup ────────────────────────────────────────────────
-    latest_yr      = years[-1]
+    latest_yr      = max(yr for yr in years if isinstance(yr, int))
     proj_years     = [latest_yr + i for i in range(1, 6)]
     n_proj         = 5
     total_cols     = 1 + n + n_proj          # 10 (label + 4 hist + 5 proj)
@@ -193,7 +215,27 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
         _style(c, fill_hex=fill, bold=bold)
         return c
 
-    # Column setup — 4 historical + 5 projection columns
+    DARK_GREEN = '006400'
+
+    def _fix_ann_headers(hdr_row):
+        """Overwrite Q cumulative and Annualized column headers."""
+        if not has_ann:
+            return
+        ltm_yr = _ltm_info['ltm_year']
+        ltm_idx = years.index(ltm_yr)
+        c = ws.cell(row=hdr_row, column=2 + ltm_idx,
+                    value=_ltm_info['q_label'])
+        _style(c, fill_hex=DARK_BLUE, bold=True, font_color=WHITE,
+               h_align='center')
+        c.border = THIN_BOX
+        ann_idx = years.index(ANN_YEAR)
+        c = ws.cell(row=hdr_row, column=2 + ann_idx,
+                    value=_ltm_info['ann_label'])
+        _style(c, fill_hex=DARK_GREEN, bold=True, font_color=WHITE,
+               h_align='center')
+        c.border = THIN_BOX
+
+    # Column setup — historical (+ optional Q/Ann) + 5 projection columns
     col_widths = {1: 40}
     for ci in range(2, 2 + n + n_proj):
         col_widths[ci] = 16
@@ -251,6 +293,7 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
 
     # Column headers — historical (DARK_BLUE) + projection (MED_BLUE)
     _write_col_headers(ws, r, list(range(2, 2 + n)), years, start_col=2)
+    _fix_ann_headers(r)
     for j, py in enumerate(proj_years):
         col = proj_start_col + j
         c = ws.cell(row=r, column=col, value=f'FY{py}E')
@@ -287,55 +330,30 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     rd_row  = r; _write_row(ws, r, '  R&D Expense', inc['rd_expense'], years, indent=1); r += 1
     sga_row = r; _write_row(ws, r, '  SG&A Expense', inc['sga_expense'], years, indent=1); r += 1
 
-    # Other Operating Expenses / (Income): balancing plug so that the EBITDA formula
-    # equals the exact reported figure.
-    # Plug = (Revenue - COGS) - R&D - SGA - Reported EBITDA
-    # Uses (Revenue - COGS) to match the formula-derived GP on this sheet.
+    # Other Operating Expenses / (Income): balancing plug so that EBIT
+    # equals the exact reported Operating Income from the 10-K.
+    # Plug = (Revenue - COGS) - R&D - SGA - Operating Income
     # Values in RAW DOLLARS — _write_row will scale to millions.
     other_opex_plug = {}
     for yr in years:
-        gp_v     = (inc['revenue'].get(yr) or 0) - (inc['cogs'].get(yr) or 0)
-        rd_v     = inc['rd_expense'].get(yr) or 0
-        sga_v    = inc['sga_expense'].get(yr) or 0
-        ebitda_v = inc['ebitda'].get(yr)
-        other_opex_plug[yr] = (gp_v - rd_v - sga_v - ebitda_v) if ebitda_v is not None else 0
-
-    # Check if the plug matches -D&A for every year (i.e. D&A is embedded
-    # in R&D / SG&A).  If so, relabel the row accordingly.
-    _da_embedded = True
-    for yr in years:
-        plug_v = other_opex_plug.get(yr) or 0
-        da_v   = inc['da'].get(yr) or 0
-        if da_v == 0 or abs(plug_v + da_v) > abs(da_v) * 0.01:   # 1% tolerance
-            _da_embedded = False
-            break
+        gp_v   = (inc['revenue'].get(yr) or 0) - (inc['cogs'].get(yr) or 0)
+        rd_v   = inc['rd_expense'].get(yr) or 0
+        sga_v  = inc['sga_expense'].get(yr) or 0
+        ebit_v = inc['operating_income'].get(yr)
+        other_opex_plug[yr] = (gp_v - rd_v - sga_v - ebit_v) if ebit_v is not None else 0
 
     other_opex_row = r
-    if _da_embedded:
-        _write_row(ws, r, '  D&A (embedded in R&D / SG&A)', other_opex_plug, years, indent=1)
-        ws.cell(row=r, column=1).comment = Comment(
-            "Plug: Gross Profit - R&D - SG&A - EBITDA.\n\n"
-            "This company reports D&A as part of R&D and/or SG&A\n"
-            "rather than as a separate operating expense line.\n"
-            "This row backs out the embedded D&A so that EBITDA\n"
-            "is stated correctly before the explicit D&A line\n"
-            "below.  The net effect is that D&A is subtracted\n"
-            "once (here it is added back, then subtracted again\n"
-            "in the D&A row).",
-            "Financial Model")
-    else:
-        _write_row(ws, r, '  Other Operating Expenses / (Income)', other_opex_plug, years, indent=1)
-        ws.cell(row=r, column=1).comment = Comment(
-            "Plug: Gross Profit - R&D - SG&A - EBITDA.\n\n"
-            "May include:\n"
-            "- Restructuring charges\n"
-            "- Impairment of assets\n"
-            "- Acquisition-related costs\n"
-            "- Litigation settlements\n"
-            "- Gains/losses on asset sales\n"
-            "- Other operating income/expense",
-            "Financial Model")
-    # Projection: placeholder — backfilled after PP&E schedule when D&A is embedded
+    _write_row(ws, r, '  Other Operating Expenses / (Income)', other_opex_plug, years, indent=1)
+    ws.cell(row=r, column=1).comment = Comment(
+        "Plug: Gross Profit - R&D - SG&A - Operating Income.\n\n"
+        "May include:\n"
+        "- Depreciation & amortization\n"
+        "- Restructuring charges\n"
+        "- Impairment of assets\n"
+        "- Acquisition-related costs\n"
+        "- Litigation settlements\n"
+        "- Other operating income/expense",
+        "Financial Model")
     last_hist = _cl(n - 1)
     for j in range(n_proj):
         _pfw(r, j, f'={last_hist}{other_opex_row}')
@@ -343,9 +361,9 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
 
     _spacer(ws, r, total_cols); r += 1
 
-    # EBITDA = Gross Profit - R&D - SGA - Other  [FORMULA]
-    ebitda_row = r
-    _lbl(r, 'EBITDA', bold=True)
+    # EBIT = Gross Profit - R&D - SGA - Other  [FORMULA]
+    ebit_row = r
+    _lbl(r, 'Operating Income (EBIT)', bold=True)
     for i in range(n):
         _fw(r, i,
             f'={_cl(i)}{gp_row}-{_cl(i)}{rd_row}-{_cl(i)}{sga_row}-{_cl(i)}{other_opex_row}',
@@ -353,6 +371,62 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     for j in range(n_proj):
         _pfw(r, j,
              f'={_pcl(j)}{gp_row}-{_pcl(j)}{rd_row}-{_pcl(j)}{sga_row}-{_pcl(j)}{other_opex_row}',
+             bold=True, fill=XLIGHT_BLUE)
+    r += 1
+
+    # EBIT Margin % = EBIT / Revenue  [FORMULA]
+    _lbl(r, '  EBIT Margin %', ind=1)
+    for i in range(n):
+        _fw(r, i,
+            f'=IF({_cl(i)}{rev_row}<>0,{_cl(i)}{ebit_row}/{_cl(i)}{rev_row},"")',
+            fmt=FMT_PCT)
+    for j in range(n_proj):
+        _pfw(r, j,
+             f'=IF({_pcl(j)}{rev_row}<>0,{_pcl(j)}{ebit_row}/{_pcl(j)}{rev_row},"")',
+             fmt=FMT_PCT)
+    r += 1
+
+    _spacer(ws, r, total_cols); r += 1
+
+    # -- EBITDA add-backs --
+    da_row = r
+    _write_row(ws, r, '  Depreciation & Amortization', inc['da'], years, indent=1)
+    for j in range(n_proj):
+        _pfw(r, j, f'={last_hist}{da_row}')
+    r += 1
+
+    amort_row = r
+    _write_row(ws, r, '  Amortization of Intangibles', inc['amortization'], years, indent=1)
+    for j in range(n_proj):
+        _pfw(r, j, f'={last_hist}{amort_row}')
+    r += 1
+
+    transform_row = r
+    _write_row(ws, r, '  Transformation & Integration Costs', inc['transformation_costs'], years, indent=1)
+    for j in range(n_proj):
+        _pfw(r, j, f'={last_hist}{transform_row}')
+    r += 1
+
+    debt_ext_row = r
+    _write_row(ws, r, '  Debt Extinguishment', inc['debt_extinguishment'], years, indent=1)
+    for j in range(n_proj):
+        _pfw(r, j, f'={last_hist}{debt_ext_row}')
+    r += 1
+
+    _spacer(ws, r, total_cols); r += 1
+
+    # EBITDA = EBIT + D&A + Amort + Transform + |DebtExt|  [FORMULA]
+    ebitda_row = r
+    _lbl(r, 'EBITDA', bold=True)
+    for i in range(n):
+        _fw(r, i,
+            f'={_cl(i)}{ebit_row}+{_cl(i)}{da_row}+{_cl(i)}{amort_row}'
+            f'+{_cl(i)}{transform_row}+ABS({_cl(i)}{debt_ext_row})',
+            bold=True, fill=XLIGHT_BLUE)
+    for j in range(n_proj):
+        _pfw(r, j,
+             f'={_pcl(j)}{ebit_row}+{_pcl(j)}{da_row}+{_pcl(j)}{amort_row}'
+             f'+{_pcl(j)}{transform_row}+ABS({_pcl(j)}{debt_ext_row})',
              bold=True, fill=XLIGHT_BLUE)
     r += 1
 
@@ -371,9 +445,8 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     # -- Stock-based Compensation (non-cash add-back) --
     sbc_row = r
     _write_row(ws, r, '  Stock-based Compensation', cf['sbc'], years, indent=1)
-    # Projection: placeholder (backfilled after assumptions band)
     for j in range(n_proj):
-        _pfw(r, j, f'={last_hist}{sbc_row}')  # overwritten by backfill
+        _pfw(r, j, f'={last_hist}{sbc_row}')
     r += 1
 
     # Adjusted EBITDA = EBITDA + SBC  [FORMULA]
@@ -385,35 +458,6 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     for j in range(n_proj):
         _pfw(r, j, f'={_pcl(j)}{ebitda_row}+{_pcl(j)}{sbc_row}',
              bold=True, fill=XLIGHT_BLUE)
-    r += 1
-
-    # -- D&A (raw input; subtracted to get EBIT) --
-    da_row = r
-    _write_row(ws, r, '  Depreciation & Amortization', inc['da'], years, indent=1)
-    # Projection: placeholder (backfilled after PP&E schedule)
-    for j in range(n_proj):
-        _pfw(r, j, f'={last_hist}{da_row}')
-    r += 1
-
-    # EBIT = EBITDA - D&A  [FORMULA]
-    ebit_row = r
-    _lbl(r, 'Operating Income (EBIT)', bold=True)
-    for i in range(n):
-        _fw(r, i, f'={_cl(i)}{ebitda_row}-{_cl(i)}{da_row}', bold=True, fill=XLIGHT_BLUE)
-    for j in range(n_proj):
-        _pfw(r, j, f'={_pcl(j)}{ebitda_row}-{_pcl(j)}{da_row}', bold=True, fill=XLIGHT_BLUE)
-    r += 1
-
-    # EBIT Margin % = EBIT / Revenue  [FORMULA]
-    _lbl(r, '  EBIT Margin %', ind=1)
-    for i in range(n):
-        _fw(r, i,
-            f'=IF({_cl(i)}{rev_row}<>0,{_cl(i)}{ebit_row}/{_cl(i)}{rev_row},"")',
-            fmt=FMT_PCT)
-    for j in range(n_proj):
-        _pfw(r, j,
-             f'=IF({_pcl(j)}{rev_row}<>0,{_pcl(j)}{ebit_row}/{_pcl(j)}{rev_row},"")',
-             fmt=FMT_PCT)
     r += 1
 
     _spacer(ws, r, total_cols); r += 1
@@ -519,6 +563,16 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
         if i == 0:
             c = ws.cell(row=r, column=2 + i, value='N/A')
             _style(c, fill_hex=MED_GRAY, h_align='center', italic=True)
+        elif has_ann and years[i] == _ltm_info.get('ltm_year'):
+            # Q cumulative: partial vs full year not comparable
+            c = ws.cell(row=r, column=2 + i, value='N/A')
+            _style(c, fill_hex=MED_GRAY, h_align='center', italic=True)
+        elif has_ann and years[i] == ANN_YEAR:
+            # Annualized growth vs latest actual annual year
+            base_idx = years.index(_ltm_info['base_year'])
+            _fw(r, i,
+                f'=IF({_cl(base_idx)}{rev_row}<>0,{_cl(i)}{rev_row}/{_cl(base_idx)}{rev_row}-1,"")',
+                fmt=FMT_PCT)
         else:
             _fw(r, i,
                 f'=IF({_cl(i-1)}{rev_row}<>0,{_cl(i)}{rev_row}/{_cl(i-1)}{rev_row}-1,"")',
@@ -617,6 +671,7 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     # =========================================================================
     _write_section_header(ws, r, 'BALANCE SHEET', cols=total_cols);  r += 1
     _write_col_headers(ws, r, list(range(2, 2 + n)), years, start_col=2)
+    _fix_ann_headers(r)
     for j, py in enumerate(proj_years):
         col = proj_start_col + j
         c = ws.cell(row=r, column=col, value=f'FY{py}E')
@@ -936,6 +991,7 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     cf_cols = total_cols
     _write_section_header(ws, r, 'CASH FLOW STATEMENT', cols=cf_cols);  r += 1
     _write_col_headers(ws, r, list(range(2, 2 + n)), years, start_col=2)
+    _fix_ann_headers(r)
     for j, py in enumerate(proj_years):
         col = proj_start_col + j
         c = ws.cell(row=r, column=col, value=f'FY{py}E')
@@ -977,6 +1033,13 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
             c = ws.cell(row=r, column=2 + i, value=0)
             _style(c, fill_hex=MED_GRAY, h_align='right', number_format=FMT_DOLLAR,
                    italic=True)
+        elif has_ann and years[i] == ANN_YEAR:
+            # Ann WC change: base_year → Q BS
+            base_idx = years.index(_ltm_info['base_year'])
+            prev = _cl(base_idx); curr = _cl(i)
+            _fw(r, i,
+                f'=({prev}{ar_row}+{prev}{inventory_row}+{prev}{other_ca_row})'
+                f'-({curr}{ar_row}+{curr}{inventory_row}+{curr}{other_ca_row})')
         else:
             prev = _cl(i - 1); curr = _cl(i)
             _fw(r, i,
@@ -1000,6 +1063,12 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
             c = ws.cell(row=r, column=2 + i, value=0)
             _style(c, fill_hex=MED_GRAY, h_align='right', number_format=FMT_DOLLAR,
                    italic=True)
+        elif has_ann and years[i] == ANN_YEAR:
+            base_idx = years.index(_ltm_info['base_year'])
+            prev = _cl(base_idx); curr = _cl(i)
+            _fw(r, i,
+                f'=({curr}{ap_row}+{curr}{accrued_row}+{curr}{deferred_rev_row}+{curr}{other_cl_row})'
+                f'-({prev}{ap_row}+{prev}{accrued_row}+{prev}{deferred_rev_row}+{prev}{other_cl_row})')
         else:
             prev = _cl(i - 1); curr = _cl(i)
             _fw(r, i,
@@ -1235,6 +1304,7 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     r += 1
     # Column headers: historical + projection
     _write_col_headers(ws, r, list(range(2, 2 + n)), years, start_col=2)
+    _fix_ann_headers(r)
     for j, py in enumerate(proj_years):
         col = proj_start_col + j
         c = ws.cell(row=r, column=col, value=f'FY{py}E')
@@ -1249,6 +1319,10 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
         if i == 0:
             c = ws.cell(row=r, column=2 + i, value='N/A (no prior year)')
             _style(c, fill_hex=MED_GRAY, h_align='center', italic=True)
+        elif has_ann and years[i] == ANN_YEAR:
+            # Ann beginning cash = base_year cash
+            base_idx = years.index(_ltm_info['base_year'])
+            _fw(r, i, f'={_cl(base_idx)}{cash_row}')
         else:
             prev = get_column_letter(2 + i - 1)
             _fw(r, i, f'={prev}{cash_row}')
@@ -1347,6 +1421,7 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     _write_section_header(ws, r, 'PP&E SCHEDULE', cols=total_cols); r += 1
     # Column headers: historical + projection
     _write_col_headers(ws, r, list(range(2, 2 + n)), years, start_col=2)
+    _fix_ann_headers(r)
     for j, py in enumerate(proj_years):
         col = proj_start_col + j
         c = ws.cell(row=r, column=col, value=f'FY{py}E')
@@ -1379,6 +1454,10 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
         if i == 0:
             c = ws.cell(row=r, column=2 + i, value='N/A')
             _style(c, fill_hex=MED_GRAY, h_align='center', italic=True)
+        elif has_ann and years[i] == ANN_YEAR:
+            # Ann beginning = base_year PP&E
+            base_idx = years.index(_ltm_info['base_year'])
+            _fw(r, i, f'={_cl(base_idx)}{ppe_row}')
         else:
             _fw(r, i, f'={_cl(i-1)}{ppe_row}')
     for j in range(n_proj):
@@ -1392,7 +1471,8 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     _lbl(r, '+ Capital Expenditures')
     for i in range(n):
         _fw(r, i, f'=ABS({_cl(i)}{capex_row})')
-    last_hist_capex_val = abs(_val(cf['capex'], latest_yr) or 0)
+    _capex_ref_yr = ANN_YEAR if has_ann else latest_yr
+    last_hist_capex_val = abs(_val(cf['capex'], _capex_ref_yr) or 0)
     for j in range(n_proj):
         if j < 2:
             # Editable yellow cells — default to last historical capex
@@ -1457,7 +1537,13 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
             fmt=FMT_PCT)
     # Editable yellow cell in step-up column — default to historical average
     capex_rev_vals = []
+    _excl_yrs = set()
+    if has_ann:
+        _excl_yrs.add(_ltm_info.get('ltm_year'))
+        _excl_yrs.add(ANN_YEAR)
     for yr in years:
+        if yr in _excl_yrs:
+            continue
         cap_v = abs((_val(cf['capex'], yr) or 0))
         rev_v = _val(inc['revenue'], yr)
         if cap_v > 0 and rev_v and rev_v > 0:
@@ -1474,6 +1560,7 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     _write_section_header(ws, r, 'RETAINED EARNINGS SCHEDULE', cols=total_cols); r += 1
     # Column headers: historical + projection
     _write_col_headers(ws, r, list(range(2, 2 + n)), years, start_col=2)
+    _fix_ann_headers(r)
     for j, py in enumerate(proj_years):
         col = proj_start_col + j
         c = ws.cell(row=r, column=col, value=f'FY{py}E')
@@ -1494,6 +1581,9 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
         if i == 0:
             c = ws.cell(row=r, column=2 + i, value='N/A')
             _style(c, fill_hex=MED_GRAY, h_align='center', italic=True)
+        elif has_ann and years[i] == ANN_YEAR:
+            base_idx = years.index(_ltm_info['base_year'])
+            _fw(r, i, f'={_cl(base_idx)}{re_row}')
         else:
             _fw(r, i, f'={_cl(i-1)}{re_row}')
     for j in range(n_proj):
@@ -1561,11 +1651,6 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     for j in range(n_proj):
         _pfw(da_row, j, f'={_pcl(j)}{ppe_depr_sch_row}')
 
-    # ── Backfill: IS "D&A embedded in R&D/SG&A" → negate PP&E depreciation ─
-    if _da_embedded:
-        for j in range(n_proj):
-            _pfw(other_opex_row, j, f'=-{_pcl(j)}{ppe_depr_sch_row}')
-
     # ── Backfill: CF D&A projections → PP&E schedule depreciation ─────
     for j in range(n_proj):
         _pfw(cf_da_row, j, f'={_pcl(j)}{ppe_depr_sch_row}')
@@ -1587,17 +1672,24 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     _ext_yrs = sorted([y for y, v in _ext_rev.items() if v is not None and v > 0])
     _latest_hist_cl = get_column_letter(2 + n - 1)
 
+    # Use only actual annual years (exclude Q cum / annualized) for CAGR
+    _annual_yrs = [yr for yr in years if isinstance(yr, int) and
+                   (not has_ann or yr != _ltm_info.get('ltm_year'))]
+
     if len(_ext_yrs) >= 2:
         _cagr_start_year = _ext_yrs[0]
         _cagr_start_rev = _ext_rev[_cagr_start_year] / 1e6
-        _cagr_periods = years[-1] - _cagr_start_year
+        _cagr_periods = latest_yr - _cagr_start_year
     else:
-        _cagr_start_year = years[0]
-        _cagr_start_rev = (inc['revenue'].get(years[0]) or 0) / 1e6
-        _cagr_periods = len(years) - 1
+        _cagr_start_year = _annual_yrs[0] if _annual_yrs else years[0]
+        _cagr_start_rev = (inc['revenue'].get(_cagr_start_year) or 0) / 1e6
+        _cagr_periods = latest_yr - _cagr_start_year if len(_annual_yrs) > 1 else 1
 
     if _cagr_periods < 1:
         _cagr_periods = 1
+
+    _cagr_end_label = (_ltm_info['ann_label'] if has_ann
+                       else f'FY{latest_yr}')
 
     r += 2
     _write_section_header(ws, r, '5-YEAR REVENUE CAGR', cols=total_cols); r += 1
@@ -1609,7 +1701,7 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
     c.border = THIN_BOX
     cagr_start_row = r; r += 1
 
-    _lbl(r, f'Ending Revenue ($M, FY{years[-1]})')
+    _lbl(r, f'Ending Revenue ($M, {_cagr_end_label})')
     c = ws.cell(row=r, column=2, value=f'={_latest_hist_cl}{rev_row}')
     _style(c, fill_hex=LIGHT_GREEN, bold=False, h_align='right',
            number_format='#,##0.0')
@@ -1661,9 +1753,14 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
 
     # Compute base-case values from historical averages
     def _hist_vals(num_data, denom_data, as_growth=False):
-        """Compute historical ratios or growth rates from raw XBRL data."""
+        """Compute historical ratios or growth rates from raw XBRL data.
+        Excludes Q cumulative and annualized sentinel years."""
         vals = []
-        sorted_yrs = sorted(years)
+        _excl = set()
+        if has_ann:
+            _excl.add(_ltm_info.get('ltm_year'))
+            _excl.add(ANN_YEAR)
+        sorted_yrs = sorted(yr for yr in years if yr not in _excl)
         if as_growth:
             for idx in range(1, len(sorted_yrs)):
                 y0, y1 = sorted_yrs[idx - 1], sorted_yrs[idx]
@@ -1816,11 +1913,14 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
         'revenue':            rev_row,
         'cogs':               cogs_row,
         'gp':                 gp_row,
+        'ebit':               ebit_row,
+        'da':                 da_row,
+        'amortization':       amort_row,
+        'transformation_costs': transform_row,
+        'debt_extinguishment':  debt_ext_row,
         'ebitda':             ebitda_row,
         'sbc':                sbc_row,
         'adj_ebitda':         adj_ebitda_row,
-        'da':                 da_row,
-        'ebit':               ebit_row,
         'interest_expense':   int_exp_row,
         'other_income':       other_inc_row,
         'pretax_income':      pretax_row,
@@ -1881,7 +1981,12 @@ def _write_financial_statements(ws, company_info: Dict, fd: Dict):
 def _calc_dcf_assumptions(fd: Dict) -> Dict:
     """Derive projection assumptions from historical data."""
     years_desc = fd['years']
-    latest_yr  = years_desc[0]
+    # Use only actual full-year annual data for averages
+    _ltm = fd.get('ltm_info', {})
+    _ann_yrs = {_ltm.get('ltm_year')} if _ltm else set()
+    # Also exclude any float sentinel (ANN_YEAR)
+    hist_yrs = [yr for yr in years_desc if isinstance(yr, int) and yr not in _ann_yrs]
+    latest_yr  = hist_yrs[0] if hist_yrs else years_desc[0]
     inc  = fd['income_statement']
     cf   = fd['cash_flow']
     bs   = fd['balance_sheet']
@@ -1890,16 +1995,16 @@ def _calc_dcf_assumptions(fd: Dict) -> Dict:
 
     # Revenue CAGR over available history
     rev_growths = []
-    for i in range(len(years_desc) - 1):
-        r0 = v(inc['revenue'], years_desc[i+1])
-        r1 = v(inc['revenue'], years_desc[i])
+    for i in range(len(hist_yrs) - 1):
+        r0 = v(inc['revenue'], hist_yrs[i+1])
+        r1 = v(inc['revenue'], hist_yrs[i])
         if r0 and r1 and r0 > 0:
             rev_growths.append((r1 / r0) - 1.0)
     avg_rev_growth = _safe_avg(rev_growths) if rev_growths else 0.05
 
     # EBITDA margin
     ebitda_margins = []
-    for yr in years_desc:
+    for yr in hist_yrs:
         rev = v(inc['revenue'], yr)
         ebt = v(inc['ebitda'], yr)
         if rev and ebt:
@@ -1908,7 +2013,7 @@ def _calc_dcf_assumptions(fd: Dict) -> Dict:
 
     # D&A % revenue
     da_pcts = []
-    for yr in years_desc:
+    for yr in hist_yrs:
         rev = v(inc['revenue'], yr)
         da  = v(inc['da'], yr)
         if rev and da:
@@ -1917,7 +2022,7 @@ def _calc_dcf_assumptions(fd: Dict) -> Dict:
 
     # Capex % revenue
     capex_pcts = []
-    for yr in years_desc:
+    for yr in hist_yrs:
         rev  = v(inc['revenue'], yr)
         capx = v(cf['capex'], yr)
         if rev and capx:
@@ -1926,7 +2031,7 @@ def _calc_dcf_assumptions(fd: Dict) -> Dict:
 
     # Effective tax rate
     tax_rates = []
-    for yr in years_desc:
+    for yr in hist_yrs:
         pre = v(inc['pretax_income'], yr)
         tax = v(inc['tax_expense'], yr)
         if pre and tax and pre > 0:
@@ -1935,7 +2040,7 @@ def _calc_dcf_assumptions(fd: Dict) -> Dict:
 
     # Implied cost of debt: interest expense / average total debt
     cod_estimates = []
-    for yr in years_desc:
+    for yr in hist_yrs:
         int_exp   = abs(v(inc['interest_expense'], yr) or 0)
         total_dbt = (v(bs['lt_debt'], yr) or 0) + (v(bs['st_debt'], yr) or 0)
         if int_exp and total_dbt > 0:
@@ -2589,7 +2694,15 @@ def _run_checks(fd: Dict) -> List[Dict]:
     completeness-style checks (e.g. subtotals where we don't extract every
     line item).
     """
-    years = fd['years']                     # newest-first
+    _all_years = fd['years']                 # newest-first
+    # Exclude Q cumulative and annualized sentinel years from validation
+    _ltm = fd.get('ltm_info', {})
+    _excl = set()
+    if _ltm:
+        if _ltm.get('ltm_year') is not None:
+            _excl.add(_ltm['ltm_year'])
+    # Also exclude any float sentinel (ANN_YEAR)
+    years = [yr for yr in _all_years if isinstance(yr, int) and yr not in _excl]
     inc   = fd['income_statement']
     bs    = fd['balance_sheet']
     cf    = fd['cash_flow']
@@ -2653,13 +2766,16 @@ def _run_checks(fd: Dict) -> List[Dict]:
                      for y in years},
     })
 
-    # 4. EBITDA = EBIT + D&A  [identity check]
+    # 4. EBITDA = EBIT + D&A + add-backs  [identity check]
     checks.append({
-        'name': 'EBITDA = EBIT + D&A',
+        'name': 'EBITDA = EBIT + D&A + Amort + Transform + DebtExt',
         'section': 'INCOME STATEMENT',
         'expected': {y: v(inc['ebitda'], y) for y in years},
         'derived':  {y: ((v(inc['operating_income'], y) or 0)
-                         + (v(inc['da'], y) or 0))
+                         + (v(inc['da'], y) or 0)
+                         + (v(inc['amortization'], y) or 0)
+                         + (v(inc['transformation_costs'], y) or 0)
+                         + abs(v(inc['debt_extinguishment'], y) or 0))
                         if v(inc['operating_income'], y) is not None else None
                      for y in years},
     })
@@ -2792,7 +2908,14 @@ def _write_validation_sheet(ws, company_info: Dict, fd: Dict, fs_rows: Dict):
     Financial Statements tab where possible, so the validation sheet
     stays live when inputs are edited.
     """
-    years_desc = fd['years']
+    _all_years_desc = fd['years']
+    # Exclude Q cumulative and annualized sentinel years from validation
+    _ltm = fd.get('ltm_info', {})
+    _excl = set()
+    if _ltm:
+        if _ltm.get('ltm_year') is not None:
+            _excl.add(_ltm['ltm_year'])
+    years_desc = [yr for yr in _all_years_desc if isinstance(yr, int) and yr not in _excl]
     years = list(reversed(years_desc))     # oldest first for display
     n     = len(years)
 
@@ -2800,8 +2923,10 @@ def _write_validation_sheet(ws, company_info: Dict, fd: Dict, fs_rows: Dict):
 
     # Cross-sheet formula helpers
     FS = "'Financial Statements'"
-    # Column letters on the FS sheet for each display year (oldest → newest)
-    fs_cols = [get_column_letter(2 + i) for i in range(n)]
+    # Column letters on the FS sheet for each display year — map to FS sheet columns
+    # which may have Q/Ann columns inserted. Find the FS-sheet column index for each year.
+    _all_years_asc = list(reversed(list(_all_years_desc)))
+    fs_cols = [get_column_letter(2 + _all_years_asc.index(yr)) for yr in years]
 
     def _fsr(key, col):
         """Reference a single cell on the FS sheet."""
@@ -2834,11 +2959,16 @@ def _write_validation_sheet(ws, company_info: Dict, fd: Dict, fs_rows: Dict):
          'der_label': '    Derived  [FS: EPS(Diluted) x Shares(Diluted)]',
          'exp_fn': lambda i: _fsr('net_income', fs_cols[i]),
          'der_fn': lambda i: f"={FS}!{fs_cols[i]}{fs_rows['eps_diluted']}*{FS}!{fs_cols[i]}{fs_rows['shares_diluted']}"},
-        # 3 — EBITDA = EBIT + D&A
-        {'exp_label': '    Expected  [FS: EBITDA (plugged to match 10-K)]',
-         'der_label': '    Derived  [FS: EBIT + D&A]',
+        # 3 — EBITDA = EBIT + D&A + Amort + Transform + DebtExt
+        {'exp_label': '    Expected  [FS: EBITDA]',
+         'der_label': '    Derived  [FS: EBIT + D&A + Amort + Transform + |DebtExt|]',
          'exp_fn': lambda i: _fsr('ebitda', fs_cols[i]),
-         'der_fn': lambda i: f"={FS}!{fs_cols[i]}{fs_rows['ebit']}+{FS}!{fs_cols[i]}{fs_rows['da']}"},
+         'der_fn': lambda i: (
+             f"={FS}!{fs_cols[i]}{fs_rows['ebit']}"
+             f"+{FS}!{fs_cols[i]}{fs_rows['da']}"
+             f"+{FS}!{fs_cols[i]}{fs_rows['amortization']}"
+             f"+{FS}!{fs_cols[i]}{fs_rows['transformation_costs']}"
+             f"+ABS({FS}!{fs_cols[i]}{fs_rows['debt_extinguishment']})")},
         # 4 — Current Assets = Sum of CA components (Other CA is a plug)
         {'exp_label': '    Expected  [FS: Total Current Assets]',
          'der_label': '    Derived  [FS: Cash+STInv+AR+Inv+OtherCA(plug)]',

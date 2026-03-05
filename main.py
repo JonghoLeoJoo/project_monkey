@@ -24,6 +24,7 @@ from sec_fetcher import (
     get_company_facts,
     get_fiscal_years,
     extract_financial_data,
+    compute_ltm,
     get_fiscal_year_end_dates,
     get_historical_closing_prices,
     get_current_price,
@@ -79,7 +80,14 @@ def build_model(company_name: str, skip_prices: bool = False, auto_select: bool 
     print(f"  [OK] Found data for: {years_display}")
 
     # Step 3: Extract financial data
-    financial_data = extract_financial_data(facts, years)
+    financial_data = extract_financial_data(facts, years, ticker=company_info['ticker'])
+
+    # Step 3b: Try to add quarterly / LTM data
+    ltm_year = compute_ltm(facts, financial_data, ticker=company_info['ticker'])
+    if ltm_year:
+        years = financial_data['years']
+        ltm_info = financial_data['ltm_info']
+        print(f"  [OK] LTM data added: {ltm_info['ann_label']}")
 
     # Step 4: Stock prices & market cap
     if not skip_prices:
@@ -328,7 +336,7 @@ def main():
     # Step 3: Extract financial data
     print()
     print("[3/6] Extracting 3-statement financial data...")
-    financial_data = extract_financial_data(facts, years)
+    financial_data = extract_financial_data(facts, years, ticker=company_info['ticker'])
 
     # Quick sanity summary
     inc = financial_data['income_statement']
