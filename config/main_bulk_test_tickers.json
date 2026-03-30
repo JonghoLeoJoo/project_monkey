@@ -1,0 +1,24 @@
+{
+  "bulk_test_tickers": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOG",
+    "AMZN",
+    "META",
+    "BRK-B",
+    "LLY",
+    "AVGO",
+    "JPM",
+    "WMT",
+    "V",
+    "UNH",
+    "XOM",
+    "MA",
+    "COST",
+    "PG",
+    "JNJ",
+    "HD",
+    "TSM"
+  ]
+}

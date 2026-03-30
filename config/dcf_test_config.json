@@ -1,56 +1,4 @@
 {
-  "test_tickers": [
-    "AAPL",
-    "MSFT",
-    "NVDA",
-    "GOOG",
-    "AMZN",
-    "META",
-    "BRK-B",
-    "LLY",
-    "AVGO",
-    "JPM",
-    "TSLA",
-    "WMT",
-    "V",
-    "UNH",
-    "XOM",
-    "MA",
-    "COST",
-    "PG",
-    "JNJ",
-    "HD",
-    "ORCL",
-    "ABBV",
-    "MRK",
-    "CRM",
-    "BAC",
-    "NFLX",
-    "AMD",
-    "CVX",
-    "KO",
-    "TMO",
-    "LIN",
-    "PEP",
-    "ADBE",
-    "CSCO",
-    "WFC",
-    "ACN",
-    "ABT",
-    "MCD",
-    "GE",
-    "DHR",
-    "NOW",
-    "TXN",
-    "IBM",
-    "PM",
-    "INTU",
-    "AMGN",
-    "QCOM",
-    "CAT",
-    "DIS",
-    "NEE"
-  ],
   "price_date": "2025-12-19",
   "defaults": {
     "avg_rev_growth": 0.05,
@@ -64,10 +12,10 @@
     "risk_free_rate": 0.045,
     "equity_risk_premium": 0.05,
     "cf_recon_threshold_ratio": 0.5,
-    "bulk_sleep_seconds": 0.3
-  },
-  "thresholds": {
-    "outlier_ratio_high": 2.0,
-    "outlier_ratio_low": 0.5
+    "bulk_sleep_seconds": 0.3,
+    "thresholds": {
+        "outlier_ratio_high": 2.0,
+        "outlier_ratio_low": 0.5
+    }
   }
 }

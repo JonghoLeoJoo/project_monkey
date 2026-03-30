@@ -34,6 +34,7 @@ from sec_fetcher import (
 )
 
 CONFIG_PATH = Path(__file__).parent / 'config' / 'dcf_test_config.json'
+TICKERS_CONFIG_PATH = Path(__file__).parent / 'config' / 'dcf_test_tickers.json'
 
 
 def _load_config(path: Path = CONFIG_PATH) -> Dict:
@@ -42,7 +43,8 @@ def _load_config(path: Path = CONFIG_PATH) -> Dict:
 
 
 CONFIG = _load_config()
-TEST_TICKERS = CONFIG['test_tickers']
+TICKERS_CONFIG = _load_config(TICKERS_CONFIG_PATH)
+TEST_TICKERS = TICKERS_CONFIG['test_tickers']
 PRICE_DATE = CONFIG['price_date']
 
 AVG_REV_GROWTH_DEFAULT = CONFIG['defaults']['avg_rev_growth']
@@ -58,8 +60,8 @@ EQUITY_RISK_PREMIUM_DEFAULT = CONFIG['defaults']['equity_risk_premium']
 CF_RECON_THRESHOLD_RATIO = CONFIG['defaults']['cf_recon_threshold_ratio']
 BULK_SLEEP_SECONDS = CONFIG['defaults']['bulk_sleep_seconds']
 
-OUTLIER_RATIO_HIGH = CONFIG['thresholds']['outlier_ratio_high']
-OUTLIER_RATIO_LOW = CONFIG['thresholds']['outlier_ratio_low']
+OUTLIER_RATIO_HIGH = CONFIG['defaults']['thresholds']['outlier_ratio_high']
+OUTLIER_RATIO_LOW = CONFIG['defaults']['thresholds']['outlier_ratio_low']
 
 
 def compute_dcf_price(fd: Dict, comp_data: List[Dict],

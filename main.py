@@ -37,6 +37,7 @@ from excel_builder import create_excel, _check_status
 
 
 CONFIG_PATH = Path(__file__).parent / 'config' / 'main_config.json'
+TICKERS_CONFIG_PATH = Path(__file__).parent / 'config' / 'main_bulk_test_tickers.json'
 
 
 def _load_config(path: Path = CONFIG_PATH) -> dict:
@@ -45,7 +46,8 @@ def _load_config(path: Path = CONFIG_PATH) -> dict:
 
 
 CONFIG = _load_config()
-BULK_TEST_TICKERS = CONFIG['bulk_test_tickers']
+TICKERS_CONFIG = _load_config(TICKERS_CONFIG_PATH)
+BULK_TEST_TICKERS = TICKERS_CONFIG['bulk_test_tickers']
 RISK_FREE_RATE_DEFAULT = CONFIG['defaults']['risk_free_rate']
 EQUITY_RISK_PREMIUM_DEFAULT = CONFIG['defaults']['equity_risk_premium']
 IMPLIED_COD_DEFAULT = CONFIG['defaults']['implied_cost_of_debt']
