@@ -4,9 +4,11 @@ Fetches financial data from SEC EDGAR for publicly traded companies.
 All financial values are returned in raw dollars (not thousands/millions).
 """
 
+import json
 import requests
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
 try:
@@ -15,14 +17,24 @@ try:
 except ImportError:
     _HAS_YFINANCE = False
 
-HEADERS = {
-    'User-Agent': 'FinancialModelApp research@example.com',
-    'Accept': 'application/json',
-}
 
-TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-FACTS_BASE_URL = "https://data.sec.gov/api/xbrl/companyfacts"
+CONFIG_PATH = Path(__file__).parent / 'config' / 'sec_fetcher_config.json'
 
+
+def _load_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+_CONFIG = _load_config()
+HEADERS = _CONFIG['headers']
+TICKERS_URL = _CONFIG['tickers_url']
+FACTS_BASE_URL = _CONFIG['facts_base_url']
+PROBE_CONCEPTS = _CONFIG['probe_concepts']
+IS_CONCEPTS = _CONFIG['is_concepts']
+BS_CONCEPTS = _CONFIG['bs_concepts']
+CF_CONCEPTS = _CONFIG['cf_concepts']
+Q_ORDER = _CONFIG['q_order']
 
 def search_company(company_name: str, auto_select: bool = False) -> Optional[Dict]:
     """Search for a company by name or ticker. Returns {cik, name, ticker} or None.
@@ -143,427 +155,14 @@ def _get_metric(facts: Dict, concepts: List[str], years: List[int],
 
 def get_fiscal_years(facts: Dict, n_years: int = 3) -> List[int]:
     """Return the most recent n fiscal years available in the company facts."""
-    probe_concepts = [
-        'Assets', 'Revenues', 'NetIncomeLoss',
-        'RevenueFromContractWithCustomerExcludingAssessedTax',
-    ]
     years_found: set = set()
-    for concept in probe_concepts:
+    for concept in PROBE_CONCEPTS:
         for v in _get_annual_values(facts, concept):
             if v.get('fy'):
                 years_found.add(v['fy'])
     if not years_found:
         return []
     return sorted(years_found, reverse=True)[:n_years]
-
-
-# =========================================================================
-# CONCEPT LISTS  –  shared between extract_financial_data & compute_ltm
-# =========================================================================
-
-IS_CONCEPTS: Dict[str, List[str]] = {
-    'revenue': [
-        'Revenues',
-        'RevenueFromContractWithCustomerExcludingAssessedTax',
-        'RevenueFromContractWithCustomerIncludingAssessedTax',
-        'SalesRevenueNet',
-        'SalesRevenueGoodsNet',
-        'SalesRevenueServicesNet',
-        'RevenuesNetOfInterestExpense',
-        'InterestAndFeeIncomeLoansAndLeases',
-        'HealthCareOrganizationRevenue',
-        'RealEstateRevenueNet',
-        'RevenueFromContractWithCustomer',
-    ],
-    'cogs': [
-        'CostOfRevenue',
-        'CostOfGoodsAndServicesSold',
-        'CostOfGoodsSold',
-        'CostOfServices',
-        'CostOfGoodsAndServicesExcludingDepreciationDepletionAndAmortization',
-        'CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization',
-        'CostOfRevenueExcludingDepreciationAndAmortization',
-        'CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization',
-    ],
-    'gross_profit': ['GrossProfit'],
-    'rd_expense': [
-        'ResearchAndDevelopmentExpense',
-        'ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost',
-        'ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost',
-    ],
-    'sga_expense': ['SellingGeneralAndAdministrativeExpense'],
-    'sga_ga': ['GeneralAndAdministrativeExpense'],
-    'sga_sm': ['SellingAndMarketingExpense', 'SellingExpense',
-               'MarketingAndAdvertisingExpense'],
-    'operating_income': ['OperatingIncomeLoss'],
-    'da': [
-        'DepreciationDepletionAndAmortization',
-        'DepreciationAndAmortization',
-        'Depreciation',
-        'AmortizationOfIntangibleAssets',
-        'DepreciationAmortizationAndAccretionNet',
-        'OtherDepreciationAndAmortization',
-        'DepreciationAndAmortizationExcludingDisposals',
-    ],
-    'amortization': [
-        'AmortizationOfIntangibleAssets',
-        'Amortization',
-    ],
-    'transformation_costs': [
-        'BusinessCombinationIntegrationRelatedCosts',
-        'BusinessCombinationAcquisitionRelatedCosts',
-        'RestructuringCharges',
-        'RestructuringAndRelatedCostIncurredCost',
-        'RestructuringCostsAndAssetImpairmentCharges',
-        'RestructuringSettlementAndImpairmentProvisions',
-    ],
-    'debt_extinguishment': [
-        'GainsLossesOnExtinguishmentOfDebt',
-        'GainLossOnExtinguishmentOfDebt',
-        'ExtinguishmentOfDebtAmount',
-    ],
-    'nonop_net': [
-        'NonoperatingIncomeExpense',
-        'OtherNonoperatingIncomeExpense',
-    ],
-    'interest_expense': [
-        'InterestExpense',
-        'InterestAndDebtExpense',
-        'InterestExpenseDebt',
-        'InterestExpenseNonoperating',
-        'InterestExpenseRelatedParty',
-        'InterestExpenseLongTermDebt',
-        'InterestExpenseOther',
-        'InterestExpenseBorrowings',
-        'InterestCostsIncurred',
-        'InterestPaidNet',
-    ],
-    'interest_income': [
-        'InvestmentIncomeInterest',
-        'InterestAndDividendIncomeOperating',
-        'InterestIncomeOperating',
-        'InterestIncomeOther',
-        'InvestmentIncomeInterestAndDividend',
-        'InvestmentIncomeNet',
-    ],
-    'pretax_income': [
-        'IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest',
-        'IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments',
-        'IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic',
-    ],
-    'tax_expense': [
-        'IncomeTaxExpenseBenefit',
-        'CurrentIncomeTaxExpenseBenefit',
-        'IncomeTaxesPaidNet',
-    ],
-    'net_income': [
-        'NetIncomeLoss',
-        'NetIncome',
-        'ProfitLoss',
-        'NetIncomeLossAvailableToCommonStockholdersBasic',
-        'NetIncomeLossAttributableToParent',
-        'IncomeLossFromContinuingOperations',
-        'IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest',
-    ],
-    'eps_basic': [
-        'EarningsPerShareBasic',
-        'IncomeLossFromContinuingOperationsPerBasicShare',
-        'EarningsPerShareBasicAndDiluted',
-    ],
-    'eps_diluted': [
-        'EarningsPerShareDiluted',
-        'IncomeLossFromContinuingOperationsPerDilutedShare',
-        'EarningsPerShareBasicAndDiluted',
-    ],
-    'shares_basic': [
-        'WeightedAverageNumberOfSharesOutstandingBasic',
-        'CommonStockSharesOutstanding',
-        'CommonStockSharesIssued',
-    ],
-    'shares_diluted': [
-        'WeightedAverageNumberOfDilutedSharesOutstanding',
-        'WeightedAverageNumberOfSharesOutstandingDiluted',
-        'CommonStockSharesOutstanding',
-    ],
-}
-
-BS_CONCEPTS: Dict[str, List[str]] = {
-    'cash': [
-        'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
-        'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations',
-        'CashAndCashEquivalentsAtCarryingValue',
-        'CashAndCashEquivalents',
-        'Cash',
-        'CashAndDueFromBanks',
-        'CashEquivalentsAtCarryingValue',
-        'RestrictedCashAndCashEquivalentsAtCarryingValue',
-    ],
-    'st_investments': [
-        'ShortTermInvestments',
-        'MarketableSecuritiesCurrent',
-        'AvailableForSaleSecuritiesCurrent',
-        'DebtSecuritiesAvailableForSaleCurrent',
-        'TradingSecuritiesCurrent',
-        'HeldToMaturitySecuritiesCurrent',
-        'EquitySecuritiesFvNiCurrent',
-        'InvestmentsCurrent',
-    ],
-    'accounts_rec': [
-        'AccountsReceivableNetCurrent',
-        'ReceivablesNetCurrent',
-        'TradeAndOtherReceivablesNetCurrent',
-        'AccountsAndNotesReceivableNet',
-        'AccountsNotesAndLoansReceivableNetCurrent',
-        'AccountsReceivableNet',
-        'ContractWithCustomerAssetNetCurrent',
-        'BilledContractReceivables',
-        'AccountsReceivableGrossCurrent',
-    ],
-    'inventory': [
-        'InventoryNet',
-        'Inventories',
-        'InventoryGross',
-        'InventoryFinishedGoods',
-        'InventoryFinishedGoodsNetOfReserves',
-        'InventoryWorkInProcess',
-        'InventoryRawMaterials',
-        'InventoryRawMaterialsNetOfReserves',
-        'InventoryAndOther',
-        'SuppliesAndInventories',
-        'RetailRelatedInventoryMerchandise',
-        'FuelInventory',
-        'InventoryNetOfAllowancesCustomerAdvancesAndProgress',
-        'InventoryRealEstate',
-        'AircraftMaintenanceMaterialsAndRepairs',
-    ],
-    'other_current_a': [
-        'OtherAssetsCurrent',
-        'PrepaidExpenseAndOtherAssetsCurrent',
-        'PrepaidExpenseCurrent',
-        'OtherCurrentAssets',
-        'DeferredCostsCurrent',
-        'PrepaidExpenseOtherCurrent',
-        'AssetsCurrentOther',
-    ],
-    'total_current_a': ['AssetsCurrent'],
-    'ppe_net': [
-        'PropertyPlantAndEquipmentNet',
-        'PropertyPlantAndEquipmentNetExcludingCapitalizedInterest',
-        'PropertyAndEquipmentNet',
-        'PropertyPlantAndEquipmentAndRightOfUseAssetAfterAccumulatedDepreciationAndAmortization',
-        'PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization',
-        'PropertyPlantEquipmentAndFinanceLeaseRightOfUseAssetNet',
-        'PropertyPlantAndEquipmentOtherNet',
-        'RealEstateInvestmentPropertyNet',
-        'ElectricUtilityPlantNet',
-    ],
-    'goodwill': ['Goodwill', 'GoodwillGross'],
-    'intangibles': [
-        'IntangibleAssetsNetExcludingGoodwill',
-        'FiniteLivedIntangibleAssetsNet',
-        'IndefiniteLivedIntangibleAssetsExcludingGoodwill',
-        'IntangibleAssetsNet',
-        'OtherIntangibleAssetsNet',
-        'CapitalizedComputerSoftwareNet',
-    ],
-    'lt_investments': [
-        'MarketableSecuritiesNoncurrent',
-        'AvailableForSaleSecuritiesNoncurrent',
-        'OtherLongTermInvestments',
-        'LongTermInvestments',
-        'InvestmentsAndOtherNoncurrentAssets',
-        'EquitySecuritiesWithoutReadilyDeterminableFairValueAmount',
-        'EquityMethodInvestments',
-    ],
-    'other_noncurrent_a': [
-        'OtherAssetsNoncurrent',
-        'OtherNoncurrentAssets',
-        'OtherLongTermAssets',
-        'DeferredIncomeTaxAssetsNet',
-        'OperatingLeaseRightOfUseAsset',
-        'NoncurrentAssets',
-    ],
-    'total_assets': ['Assets'],
-    'accounts_pay': [
-        'AccountsPayableCurrent',
-        'AccountsPayable',
-        'AccountsPayableAndAccruedLiabilitiesCurrent',
-        'TradeAccountsPayableCurrent',
-        'AccountsPayableRelatedPartiesCurrent',
-        'AccountsPayableTradeCurrent',
-        'AccountsPayableCurrentAndNoncurrent',
-    ],
-    'accrued_liab': [
-        'AccruedLiabilitiesCurrent',
-        'EmployeeRelatedLiabilitiesCurrent',
-        'AccruedAndOtherCurrentLiabilities',
-        'AccruedExpensesAndOtherCurrentLiabilities',
-        'OtherAccruedLiabilitiesCurrent',
-        'AccruedExpensesCurrent',
-    ],
-    'other_current_l': [
-        'OtherLiabilitiesCurrent',
-        'OtherCurrentLiabilities',
-        'AccruedIncomeTaxesCurrent',
-        'TaxesPayableCurrent',
-        'OtherCurrentLiabilitiesAndAccruedExpenses',
-    ],
-    'st_debt': [
-        'ShortTermBorrowings',
-        'LongTermDebtCurrent',
-        'CurrentMaturitiesOfLongTermDebt',
-        'DebtCurrent',
-        'NotesPayableCurrent',
-        'ShortTermDebtAndCurrentMaturitiesOfLongTermDebt',
-        'LongTermDebtAndCapitalLeaseObligationsCurrent',
-        'CommercialPaper',
-        'LinesOfCreditCurrent',
-    ],
-    'deferred_rev_cur': [
-        'DeferredRevenueCurrent',
-        'ContractWithCustomerLiabilityCurrent',
-        'DeferredRevenueAndCredits',
-        'CustomerAdvancesCurrent',
-        'DeferredIncomeCurrent',
-    ],
-    'total_current_l': ['LiabilitiesCurrent'],
-    'lt_debt': [
-        'LongTermDebtNoncurrent',
-        'LongTermDebt',
-        'LongTermDebtExcludingCurrentMaturities',
-        'LongTermDebtAndCapitalLeaseObligations',
-        'LongTermNotesPayable',
-        'SeniorLongTermNotes',
-        'ConvertibleDebtNoncurrent',
-        'UnsecuredLongTermDebt',
-        'LongTermBorrowings',
-    ],
-    'deferred_tax_l': [
-        'DeferredIncomeTaxLiabilitiesNet',
-        'DeferredTaxLiabilitiesNoncurrent',
-        'DeferredTaxLiabilities',
-        'DeferredIncomeTaxesAndOtherTaxLiabilitiesNoncurrent',
-        'DeferredTaxAndOtherLiabilitiesNoncurrent',
-        'AccruedIncomeTaxesNoncurrent',
-    ],
-    'other_noncurrent_l': [
-        'OtherLiabilitiesNoncurrent',
-        'OtherNoncurrentLiabilities',
-        'OtherLongTermLiabilities',
-        'LiabilitiesOtherThanLongtermDebtNoncurrent',
-        'OperatingLeaseLiabilityNoncurrent',
-    ],
-    'total_liabilities': ['Liabilities'],
-    'common_stock': [
-        'CommonStockValue',
-        'CommonStockValueOutstanding',
-        'CommonStocksIncludingAdditionalPaidInCapital',
-    ],
-    'apic': [
-        'AdditionalPaidInCapital',
-        'AdditionalPaidInCapitalCommonStock',
-    ],
-    'retained_earnings': [
-        'RetainedEarningsAccumulatedDeficit',
-        'RetainedEarnings',
-        'RetainedEarningsAppropriated',
-    ],
-    'treasury_stock': [
-        'TreasuryStockValue',
-        'TreasuryStockCommonValue',
-        'TreasuryStockAtCost',
-    ],
-    'total_equity': [
-        'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
-        'StockholdersEquity',
-        'PartnersCapital',
-        'MembersEquity',
-        'LimitedLiabilityCompanyLlcMembersEquityIncludingPortionAttributableToNoncontrollingInterest',
-    ],
-}
-
-CF_CONCEPTS: Dict[str, List[str]] = {
-    'operating_cf': [
-        'NetCashProvidedByUsedInOperatingActivities',
-        'NetCashProvidedByUsedInOperatingActivitiesContinuingOperations',
-        'CashGeneratedFromOperations',
-    ],
-    'capex': [
-        'PaymentsToAcquirePropertyPlantAndEquipment',
-        'AcquisitionsOfPropertyPlantAndEquipment',
-        'PurchasesOfPropertyAndEquipment',
-        'PaymentsForCapitalImprovements',
-        'PaymentsToAcquirePropertyPlantEquipmentAndOther',
-        'PaymentsToAcquireProductiveAssets',
-        'InvestmentsInPropertyPlantAndEquipment',
-        'PaymentsToAcquireAndDevelopRealEstate',
-        'CapitalExpenditureDiscontinuedOperations',
-        'PaymentsToAcquireOtherPropertyPlantAndEquipment',
-        'PropertyPlantAndEquipmentAdditions',
-    ],
-    'acquisitions': [
-        'PaymentsToAcquireBusinessesNetOfCashAcquired',
-        'PaymentsToAcquireBusinessesGross',
-        'PaymentsToAcquireBusinessesAndInterestInAffiliates',
-        'BusinessAcquisitionCostOfAcquiredEntityTransactionCosts',
-    ],
-    'investing_cf': [
-        'NetCashProvidedByUsedInInvestingActivities',
-        'NetCashProvidedByUsedInInvestingActivitiesContinuingOperations',
-    ],
-    'dividends': [
-        'PaymentsOfDividends',
-        'PaymentsOfDividendsCommonStock',
-        'PaymentsOfOrdinaryDividends',
-        'DividendsPaid',
-        'PaymentsOfDividendsAndDividendEquivalentsOnRestrictedStockUnitsAndOtherEquityAwards',
-    ],
-    'repurchases': [
-        'PaymentsForRepurchaseOfCommonStock',
-        'TreasuryStockValueAcquiredCostMethod',
-        'PaymentsForRepurchaseOfEquity',
-        'PaymentsForRepurchaseOfCommonStockAndStockAwards',
-        'RepurchaseOfCommonStock',
-    ],
-    'debt_issuance': [
-        'ProceedsFromIssuanceOfLongTermDebt',
-        'ProceedsFromDebtNetOfIssuanceCosts',
-        'ProceedsFromIssuanceOfDebt',
-        'ProceedsFromBorrowings',
-        'ProceedsFromLongTermLinesOfCredit',
-        'ProceedsFromIssuanceOfSeniorLongTermDebt',
-        'ProceedsFromIssuanceOfUnsecuredDebt',
-    ],
-    'debt_repay': [
-        'RepaymentsOfLongTermDebt',
-        'RepaymentsOfDebt',
-        'RepaymentsOfBorrowings',
-        'RepaymentOfLongTermDebt',
-        'RepaymentsOfSeniorDebt',
-        'RepaymentsOfLinesOfCredit',
-        'RepaymentsOfUnsecuredDebt',
-        'RepaymentsOfNotesPayable',
-    ],
-    'financing_cf': [
-        'NetCashProvidedByUsedInFinancingActivities',
-        'NetCashProvidedByUsedInFinancingActivitiesContinuingOperations',
-    ],
-    'fx_effect': [
-        'EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations',
-        'EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
-        'EffectOfExchangeRateOnCashAndCashEquivalents',
-        'EffectOfExchangeRateOnCashAndCashEquivalentsContinuingOperations',
-        'ExchangeRateEffectOnCashAndCashEquivalents',
-        'EffectOfExchangeRateOnCash',
-    ],
-    'sbc': [
-        'ShareBasedCompensation',
-        'AllocatedShareBasedCompensationExpense',
-        'ShareBasedCompensationExpense',
-        'EmployeeBenefitsAndShareBasedCompensation',
-        'StockBasedCompensation',
-    ],
-}
 
 
 # =========================================================================
@@ -655,12 +254,8 @@ def _identify_latest_quarter(facts: Dict,
     Returns {'fy': int, 'fp': str} or None.
     Skips Q4 (covered by 10-K).
     """
-    probe_concepts = [
-        'Assets', 'Revenues', 'NetIncomeLoss',
-        'RevenueFromContractWithCustomerExcludingAssessedTax',
-    ]
     best = None  # (fy, fp, end_date)
-    for concept in probe_concepts:
+    for concept in PROBE_CONCEPTS:
         try:
             concept_data = facts['facts']['us-gaap'][concept]
             units = concept_data.get('units', {})
@@ -728,7 +323,7 @@ def _recompute_derived(fd: Dict, yr) -> None:
 
 
 # Quarter ordering for comparison
-_Q_ORDER = {'Q1': 1, 'Q2': 2, 'Q3': 3}
+_Q_ORDER = Q_ORDER
 
 
 def compute_ltm(facts: Dict, financial_data: Dict,

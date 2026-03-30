@@ -17,6 +17,7 @@ import os
 import json
 import time
 import traceback
+from pathlib import Path
 from typing import Dict, Optional, List, Tuple
 
 from sec_fetcher import (
@@ -32,21 +33,33 @@ from sec_fetcher import (
     get_industry_peers,
 )
 
-# 50 largest US public companies by market cap (as of late 2025)
-TEST_TICKERS = [
-    'AAPL', 'MSFT', 'NVDA', 'GOOG', 'AMZN',
-    'META', 'BRK-B', 'LLY', 'AVGO', 'JPM',
-    'TSLA', 'WMT', 'V', 'UNH', 'XOM',
-    'MA', 'COST', 'PG', 'JNJ', 'HD',
-    'ORCL', 'ABBV', 'MRK', 'CRM', 'BAC',
-    'NFLX', 'AMD', 'CVX', 'KO', 'TMO',
-    'LIN', 'PEP', 'ADBE', 'CSCO', 'WFC',
-    'ACN', 'ABT', 'MCD', 'GE', 'DHR',
-    'NOW', 'TXN', 'IBM', 'PM', 'INTU',
-    'AMGN', 'QCOM', 'CAT', 'DIS', 'NEE',
-]
+CONFIG_PATH = Path(__file__).parent / 'config' / 'dcf_test_config.json'
 
-PRICE_DATE = '2025-12-19'
+
+def _load_config(path: Path = CONFIG_PATH) -> Dict:
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+CONFIG = _load_config()
+TEST_TICKERS = CONFIG['test_tickers']
+PRICE_DATE = CONFIG['price_date']
+
+AVG_REV_GROWTH_DEFAULT = CONFIG['defaults']['avg_rev_growth']
+AVG_EBITDA_MARGIN_DEFAULT = CONFIG['defaults']['avg_ebitda_margin']
+AVG_DA_PCT_DEFAULT = CONFIG['defaults']['avg_da_pct']
+AVG_CAPEX_PCT_DEFAULT = CONFIG['defaults']['avg_capex_pct']
+AVG_TAX_DEFAULT = CONFIG['defaults']['avg_tax']
+COST_OF_DEBT_DEFAULT = CONFIG['defaults']['cost_of_debt']
+WACC_FLOOR = CONFIG['defaults']['wacc_floor']
+TERMINAL_GROWTH = CONFIG['defaults']['terminal_growth']
+RISK_FREE_RATE_DEFAULT = CONFIG['defaults']['risk_free_rate']
+EQUITY_RISK_PREMIUM_DEFAULT = CONFIG['defaults']['equity_risk_premium']
+CF_RECON_THRESHOLD_RATIO = CONFIG['defaults']['cf_recon_threshold_ratio']
+BULK_SLEEP_SECONDS = CONFIG['defaults']['bulk_sleep_seconds']
+
+OUTLIER_RATIO_HIGH = CONFIG['thresholds']['outlier_ratio_high']
+OUTLIER_RATIO_LOW = CONFIG['thresholds']['outlier_ratio_low']
 
 
 def compute_dcf_price(fd: Dict, comp_data: List[Dict],
@@ -74,7 +87,7 @@ def compute_dcf_price(fd: Dict, comp_data: List[Dict],
         r1 = v(inc['revenue'], years_desc[i])
         if r0 and r1 and r0 > 0:
             rev_growths.append((r1 / r0) - 1.0)
-    avg_rev_growth = sum(rev_growths) / len(rev_growths) if rev_growths else 0.05
+    avg_rev_growth = sum(rev_growths) / len(rev_growths) if rev_growths else AVG_REV_GROWTH_DEFAULT
 
     # EBITDA margin
     ebitda_margins = []
@@ -83,7 +96,7 @@ def compute_dcf_price(fd: Dict, comp_data: List[Dict],
         ebt = v(inc['ebitda'], yr)
         if rev and ebt:
             ebitda_margins.append(ebt / rev)
-    avg_ebitda_margin = sum(ebitda_margins) / len(ebitda_margins) if ebitda_margins else 0.20
+    avg_ebitda_margin = sum(ebitda_margins) / len(ebitda_margins) if ebitda_margins else AVG_EBITDA_MARGIN_DEFAULT
 
     # D&A %
     da_pcts = []
@@ -92,7 +105,7 @@ def compute_dcf_price(fd: Dict, comp_data: List[Dict],
         da = v(inc['da'], yr)
         if rev and da:
             da_pcts.append(da / rev)
-    avg_da_pct = sum(da_pcts) / len(da_pcts) if da_pcts else 0.05
+    avg_da_pct = sum(da_pcts) / len(da_pcts) if da_pcts else AVG_DA_PCT_DEFAULT
 
     # Capex %
     capex_pcts = []
@@ -101,7 +114,7 @@ def compute_dcf_price(fd: Dict, comp_data: List[Dict],
         capx = v(cf['capex'], yr)
         if rev and capx:
             capex_pcts.append(abs(capx) / rev)
-    avg_capex_pct = sum(capex_pcts) / len(capex_pcts) if capex_pcts else 0.04
+    avg_capex_pct = sum(capex_pcts) / len(capex_pcts) if capex_pcts else AVG_CAPEX_PCT_DEFAULT
 
     # Tax rate
     tax_rates = []
@@ -110,13 +123,13 @@ def compute_dcf_price(fd: Dict, comp_data: List[Dict],
         tax = v(inc['tax_expense'], yr)
         if pre and tax and pre > 0:
             tax_rates.append(tax / pre)
-    avg_tax = sum(tax_rates) / len(tax_rates) if tax_rates else 0.21
+    avg_tax = sum(tax_rates) / len(tax_rates) if tax_rates else AVG_TAX_DEFAULT
 
     # --- WACC calculation ---
     # Cost of debt
     int_exp_raw = abs(inc['interest_expense'].get(latest_yr) or 0)
     total_debt_raw = (bs['st_debt'].get(latest_yr) or 0) + (bs['lt_debt'].get(latest_yr) or 0)
-    cost_of_debt = (int_exp_raw / total_debt_raw) if total_debt_raw > 0 else 0.05
+    cost_of_debt = (int_exp_raw / total_debt_raw) if total_debt_raw > 0 else COST_OF_DEBT_DEFAULT
     cod_after_tax = cost_of_debt * (1 - avg_tax)
 
     # Beta from comparable companies (un-lever, average, re-lever)
@@ -173,9 +186,9 @@ def compute_dcf_price(fd: Dict, comp_data: List[Dict],
 
     # Sanity: if WACC is too low or negative, cap it
     if wacc <= 0.02:
-        wacc = 0.10  # fallback
+        wacc = WACC_FLOOR  # fallback
 
-    terminal_growth = 0.025
+    terminal_growth = TERMINAL_GROWTH
 
     # --- 5-Year Projections ---
     base_revenue = v(inc['revenue'], latest_yr) or 0
@@ -337,7 +350,7 @@ def diagnose_missing_items(fd: Dict) -> List[str]:
     fincf = cf['financing_cf'].get(latest) or 0
     fx = cf['fx_effect'].get(latest) or 0
     net_cf = opcf + invcf + fincf + fx
-    if opcf != 0 and abs(net_cf) > 0.5 * abs(opcf):
+    if opcf != 0 and abs(net_cf) > CF_RECON_THRESHOLD_RATIO * abs(opcf):
         issues.append(f"CF RECONCILIATION: Net CF = ${net_cf/1e6:,.0f}M "
                       f"(vs OpCF=${opcf/1e6:,.0f}M)")
 
@@ -356,8 +369,8 @@ def run_test():
     # Fetch WACC inputs once (shared across all companies)
     treasury_yield = get_treasury_yield()
     kroll_erp = get_kroll_erp()
-    rf = treasury_yield or 0.045
-    erp = kroll_erp or 0.05
+    rf = treasury_yield or RISK_FREE_RATE_DEFAULT
+    erp = kroll_erp or EQUITY_RISK_PREMIUM_DEFAULT
     print(f"  Risk-Free Rate: {rf*100:.2f}%")
     print(f"  Equity Risk Premium: {erp*100:.1f}%")
     print()
@@ -435,7 +448,7 @@ def run_test():
             else:
                 ratio = implied_price / actual_price
                 result['ratio'] = ratio
-                if ratio > 2.0 or ratio < 0.5:
+                if ratio > OUTLIER_RATIO_HIGH or ratio < OUTLIER_RATIO_LOW:
                     result['status'] = 'OUTLIER'
                     result['issues'] = diagnose_missing_items(financial_data)
                 else:
@@ -475,7 +488,7 @@ def run_test():
             traceback.print_exc()
 
         results.append(result)
-        time.sleep(0.3)  # SEC rate limit
+        time.sleep(BULK_SLEEP_SECONDS)  # SEC rate limit
 
     # ── Summary Report ─────────────────────────────────────────────────────
     print()

@@ -1,0 +1,30 @@
+{
+  "bulk_test_tickers": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOG",
+    "AMZN",
+    "META",
+    "BRK-B",
+    "LLY",
+    "AVGO",
+    "JPM",
+    "WMT",
+    "V",
+    "UNH",
+    "XOM",
+    "MA",
+    "COST",
+    "PG",
+    "JNJ",
+    "HD",
+    "TSM"
+  ],
+  "defaults": {
+    "risk_free_rate": 0.045,
+    "equity_risk_premium": 0.05,
+    "implied_cost_of_debt": 0.05,
+    "bulk_test_sleep_seconds": 0.2
+  }
+}

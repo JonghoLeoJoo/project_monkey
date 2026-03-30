@@ -18,6 +18,7 @@ import sys
 import os
 import json
 import time
+from pathlib import Path
 
 from sec_fetcher import (
     search_company,
@@ -35,13 +36,20 @@ from sec_fetcher import (
 from excel_builder import create_excel, _check_status
 
 
-# 20 largest US-listed companies by market cap (diverse sectors)
-BULK_TEST_TICKERS = [
-    'AAPL', 'MSFT', 'NVDA', 'GOOG', 'AMZN',
-    'META', 'BRK-B', 'LLY', 'AVGO', 'JPM',
-    'WMT', 'V', 'UNH', 'XOM', 'MA',
-    'COST', 'PG', 'JNJ', 'HD', 'TSM',
-]
+CONFIG_PATH = Path(__file__).parent / 'config' / 'main_config.json'
+
+
+def _load_config(path: Path = CONFIG_PATH) -> dict:
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+CONFIG = _load_config()
+BULK_TEST_TICKERS = CONFIG['bulk_test_tickers']
+RISK_FREE_RATE_DEFAULT = CONFIG['defaults']['risk_free_rate']
+EQUITY_RISK_PREMIUM_DEFAULT = CONFIG['defaults']['equity_risk_premium']
+IMPLIED_COD_DEFAULT = CONFIG['defaults']['implied_cost_of_debt']
+BULK_TEST_SLEEP_SECONDS = CONFIG['defaults']['bulk_test_sleep_seconds']
 
 
 def _safe_name(name: str) -> str:
@@ -117,8 +125,8 @@ def build_model(company_name: str, skip_prices: bool = False, auto_select: bool 
         treasury_yield = None
         kroll_erp = None
 
-    rf = treasury_yield or 0.045
-    erp = kroll_erp or 0.05
+    rf = treasury_yield or RISK_FREE_RATE_DEFAULT
+    erp = kroll_erp or EQUITY_RISK_PREMIUM_DEFAULT
 
     comp_data = []
     if not auto_select and not skip_prices and price_date is None:
@@ -143,7 +151,7 @@ def build_model(company_name: str, skip_prices: bool = False, auto_select: bool 
     diluted_sh = (inc['shares_diluted'].get(latest) or 0) / 1e6
     int_exp    = abs(inc['interest_expense'].get(latest) or 0)
     total_debt_raw = (bs['st_debt'].get(latest) or 0) + (bs['lt_debt'].get(latest) or 0)
-    implied_cod = round(int_exp / total_debt_raw, 4) if total_debt_raw > 0 else 0.05
+    implied_cod = round(int_exp / total_debt_raw, 4) if total_debt_raw > 0 else IMPLIED_COD_DEFAULT
 
     financial_data['wacc_inputs'] = {
         'current_price':         current_price_data,
@@ -221,7 +229,7 @@ def bulk_test():
             print(f"  [ERROR] {ticker}: {e}")
 
         # Respect SEC rate limit (10 req/sec, but be conservative)
-        time.sleep(0.2)
+        time.sleep(BULK_TEST_SLEEP_SECONDS)
 
     # -- Consolidated Report ------------------------------------------
     print()
@@ -377,8 +385,8 @@ def main():
     treasury_yield = get_treasury_yield()
     kroll_erp = get_kroll_erp()
 
-    rf_main = treasury_yield or 0.045
-    erp_main = kroll_erp or 0.05
+    rf_main = treasury_yield or RISK_FREE_RATE_DEFAULT
+    erp_main = kroll_erp or EQUITY_RISK_PREMIUM_DEFAULT
 
     if treasury_yield:
         print(f"  [OK] Risk-Free Rate (CNBC US10Y): {treasury_yield*100:.2f}%")
@@ -410,7 +418,7 @@ def main():
     diluted_sh = (inc_w['shares_diluted'].get(latest_w) or 0) / 1e6
     int_exp_w  = abs(inc_w['interest_expense'].get(latest_w) or 0)
     total_debt_w = (bs_w['st_debt'].get(latest_w) or 0) + (bs_w['lt_debt'].get(latest_w) or 0)
-    implied_cod = round(int_exp_w / total_debt_w, 4) if total_debt_w > 0 else 0.05
+    implied_cod = round(int_exp_w / total_debt_w, 4) if total_debt_w > 0 else IMPLIED_COD_DEFAULT
 
     financial_data['wacc_inputs'] = {
         'current_price':         current_price_data,
