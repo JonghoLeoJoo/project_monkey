@@ -395,10 +395,11 @@ def run_test():
 
         try:
             # 1. Find company
-            company_info = search_company(ticker, auto_select=True)
-            if not company_info:
+            try:
+                company_info = search_company(ticker)
+            except (ValueError, RuntimeError) as e:
                 result['status'] = 'SKIP'
-                result['error'] = 'Company not found'
+                result['error'] = str(e)
                 results.append(result)
                 continue
             result['name'] = company_info['name']

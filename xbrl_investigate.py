@@ -8,7 +8,12 @@ actually use for the financial items our model is missing.
 import json
 import sys
 from pathlib import Path
-from sec_fetcher import search_company, get_company_facts, get_fiscal_years, _get_annual_values
+from sec_fetcher import (
+    search_company,
+    get_company_facts,
+    get_fiscal_years,
+    _get_annual_values,
+)
 
 CONFIG_PATH = Path(__file__).parent / 'config' / 'xbrl_investigate_config.json'
 
@@ -66,9 +71,10 @@ def investigate_company(ticker, issues):
     print(f"  {ticker}")
     print(f"{'='*80}")
 
-    company_info = search_company(ticker, auto_select=True)
-    if not company_info:
-        print(f"  Could not find {ticker}")
+    try:
+        company_info = search_company(ticker)
+    except (ValueError, RuntimeError) as e:
+        print(f"  {e}")
         return
 
     facts = get_company_facts(company_info['cik'])

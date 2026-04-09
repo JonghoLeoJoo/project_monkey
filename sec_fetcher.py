@@ -36,11 +36,18 @@ BS_CONCEPTS = _CONFIG['bs_concepts']
 CF_CONCEPTS = _CONFIG['cf_concepts']
 Q_ORDER = _CONFIG['q_order']
 
-def search_company(company_name: str, auto_select: bool = False) -> Optional[Dict]:
-    """Search for a company by name or ticker. Returns {cik, name, ticker} or None.
+"""
+정규화 쿼리 진행전 단순히 string match로 ticker검사, 혹은 회사명에 검색어 포함으로 판단한다. 
+TODO 고급검사 기능 추가
+"""
+def search_company(company_name: str) -> Dict[str, str]:
+    """Search for a company by name or ticker.
 
-    If auto_select is True, automatically picks the best match when multiple
-    results are found (useful for non-interactive / batch mode).
+    Returns {cik, name, ticker}.
+
+    Raises:
+        RuntimeError: If company list request fails.
+        ValueError: If no company is found or selection is cancelled.
     """
     print(f"  Searching SEC EDGAR for: '{company_name}'...")
     try:
@@ -48,51 +55,30 @@ def search_company(company_name: str, auto_select: bool = False) -> Optional[Dic
         response.raise_for_status()
         tickers = response.json()
     except requests.RequestException as e:
-        print(f"  Error fetching company list: {e}")
-        return None
+        raise RuntimeError(f"Error fetching company list: {e}") from e
 
     query = company_name.strip().lower()
-    matches = []
-
+    matches = {}
     for _, company in tickers.items():
         title = company.get('title', '').lower()
         ticker = company.get('ticker', '').lower()
         if query == ticker or query in title or title.startswith(query):
-            matches.append({
+            matches = {
                 'cik': str(company['cik_str']).zfill(10),
                 'name': company['title'],
                 'ticker': company['ticker'],
-            })
+            }
+            break  # perfect match on ticker or name, no need to keep looking
 
     if not matches:
-        print(f"  No company found for '{company_name}'.")
-        return None
+        raise ValueError(
+            f"No company found for '{company_name}'. "
+            "Try the exact ticker (e.g., AAPL) or official SEC name."
+        )
 
-    if len(matches) == 1:
-        print(f"  Found: {matches[0]['name']} ({matches[0]['ticker']}), CIK: {matches[0]['cik']}")
-        return matches[0]
 
-    # Sort by how closely name matches the query
-    matches.sort(key=lambda m: (0 if m['ticker'].lower() == query else 1,
-                                 0 if m['name'].lower() == query else 1,
-                                 len(m['name'])))
-
-    if auto_select:
-        print(f"  Auto-selected: {matches[0]['name']} ({matches[0]['ticker']})")
-        return matches[0]
-
-    print(f"\n  Multiple matches found:")
-    for i, m in enumerate(matches[:10], 1):
-        print(f"    {i}. {m['name']} ({m['ticker']})")
-
-    while True:
-        try:
-            choice = int(input(f"\n  Select company (1-{min(len(matches), 10)}): "))
-            if 1 <= choice <= min(len(matches), 10):
-                return matches[choice - 1]
-        except (ValueError, KeyboardInterrupt):
-            pass
-        print("  Invalid choice, please try again.")
+    print(f"  Auto-selected: {matches['name']} ({matches['ticker']})")
+    return matches
 
 
 def get_company_facts(cik: str) -> Optional[Dict]:
@@ -115,22 +101,24 @@ def _get_annual_values(facts: Dict, concept: str, taxonomy: str = 'us-gaap') -> 
         concept_data = facts['facts'][taxonomy][concept]
         units = concept_data.get('units', {})
         for unit_key in ('USD', 'shares', 'pure'):
-            if unit_key not in units:
+            unit_values = units.get(unit_key)
+            if not unit_values:
                 continue
             annual = [
-                v for v in units[unit_key]
-                if v.get('form') == '10-K' and v.get('fp') == 'FY'
-                and 'end' in v and 'val' in v and v.get('fy')
+                v for v in unit_values
+                if v.get('form') == '10-K' 
+                and v.get('fp') == 'FY'
+                and v.get('end') 
+                and 'val' in v 
+                and v.get('fy') is not None
             ]
             if not annual:
                 continue
             # deduplicate: keep the latest filing for each fiscal year
-            best = {}
-            for v in annual:
-                fy = v['fy']
-                if fy not in best or v['end'] > best[fy]['end']:
-                    best[fy] = v
-            return sorted(best.values(), key=lambda x: x['end'], reverse=True)
+            best_by_fy: Dict[int, Dict[str, Any]] = {}
+            for v in sorted(annual, key=lambda item: item['end'], reverse=True):
+                best_by_fy.setdefault(v['fy'], v)
+            return sorted(best_by_fy.values(), key=lambda item: item['end'], reverse=True)
         return []
     except (KeyError, TypeError):
         return []
@@ -184,8 +172,11 @@ def _get_quarterly_values(facts: Dict, concept: str,
                 continue
             quarterly = [
                 v for v in units[unit_key]
-                if v.get('form') == '10-Q' and v.get('fy') == fiscal_year
-                and 'end' in v and 'val' in v and v.get('fp')
+                if v.get('form') == '10-Q' 
+                and v.get('fy') == fiscal_year
+                and 'end' in v 
+                and 'val' in v 
+                and v.get('fp')
                 and v.get('fp') != 'FY'
             ]
             if not quarterly:
